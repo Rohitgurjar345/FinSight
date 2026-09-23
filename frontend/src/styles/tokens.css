@@ -1,0 +1,39 @@
+:root {
+  /* Color */
+  --ink: #0D1117;
+  --surface: #161C26;
+  --surface-raised: #1B222E;
+  --paper: #EAEEF3;
+  --muted: #8B95A5;
+  --signal: #4FA98C;
+  --signal-dim: #3A8A72;
+  --caution: #C77B4A;
+  --border: rgba(234, 238, 243, 0.10);
+  --border-strong: rgba(234, 238, 243, 0.18);
+
+  /* Type */
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Scale */
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.5rem;
+  --text-3xl: 3.25rem;
+
+  /* Space */
+  --space-1: 0.5rem;
+  --space-2: 1rem;
+  --space-3: 1.5rem;
+  --space-4: 2.5rem;
+  --space-5: 4rem;
+
+  /* Radius — deliberately rectangular-rounded, never pill (no 999px anywhere) */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+}
