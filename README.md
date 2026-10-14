@@ -1,395 +1,377 @@
-# Modules 1 & 2 — Ingestion + Categorization (backend only, no frontend)
+# FinSight — AI-Powered Personal Financial Intelligence Platform (Backend)
 
-## Setup
+Upload one or more bank statements (CSV / Excel / text-layer PDF) and the platform automatically:
+
+1. **Ingests** them (HDFC / ICICI / SBI / generic layouts) into one canonical schema
+2. **Categorizes** every transaction (rule engine + TF-IDF/Logistic Regression fallback)
+3. **Estimates** a monthly financial profile from the categorized data
+4. **Scores** financial health (weighted, percentile-calibrated, explainable)
+5. **Pre-assesses** loan readiness (XGBoost + SHAP, 3 tiers, mandatory disclaimer)
+6. **Answers questions** about your statement (RAG assistant with a no-API-key fallback)
+
+> Everything below uses `python` (not `python3`) because the commands were verified on Windows / Git Bash.
+> On macOS/Linux, use `python3` wherever you see `python`.
+
+---
+
+## 1. Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Python 3.11 – 3.13 | Check with `python --version` |
+| pip | Comes with Python |
+| Git (optional) | Only needed to clone the repo |
+
+---
+
+## 2. Get the code
+
+```bash
+git clone https://github.com/Rohitgurjar345/FinSight.git
+cd FinSight
 ```
+
+Or unzip the downloaded ZIP and `cd` into the extracted folder. **All commands below must be run from this project root folder** (the one containing `finance_platform.py`) — otherwise you will get `ModuleNotFoundError`.
+
+---
+
+## 3. Required data files
+
+Place these in `data/raw/` (they are used for training and testing):
+
+| File | Used by |
+|---|---|
+| `bank.xlsx` | Module 1 test (real HDFC-layout statement) |
+| `Daily_Household_Transactions.csv` | Module 1 / 2 / 5 testing |
+| `budgetwise_finance_dataset.csv` | Module 1 stress-testing (messy data) |
+| `financial_transaction_test.csv` | Module 2 training |
+| `test_transactions.csv` | Module 2 training |
+| `data.csv` | Module 3 health-score population reference |
+| `monthly_spending_dataset_2020_2025-selected-columns__1_.csv` | Module 3 forecasting |
+| `Loan_Prediction.csv` | Module 4 training |
+
+Check they are all present:
+
+```bash
+ls data/raw
+```
+
+---
+
+## 4. Environment setup
+
+### 4.1 Create a virtual environment (do NOT use `--system-site-packages`)
+
+```bash
+python -m venv venv
+```
+
+### 4.2 Activate it
+
+| Shell | Command |
+|---|---|
+| Git Bash (Windows) | `source venv/Scripts/activate` |
+| Command Prompt (Windows) | `venv\Scripts\activate.bat` |
+| PowerShell (Windows) | `venv\Scripts\Activate.ps1` |
+| macOS / Linux | `source venv/bin/activate` |
+
+Your prompt should now start with `(venv)`.
+
+### 4.3 Upgrade pip tooling (prevents most install errors)
+
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
+
+### 4.4 Install dependencies
+
+```bash
 pip install -r requirements.txt
+pip install pytest
 ```
 
-## Single Platform — everything automatic after one upload (except one thing)
+Expected contents of `requirements.txt`:
 
-`finance_platform.py` is the actual answer to "upload once, everything runs":
+```
+pandas>=2.2.3
+openpyxl>=3.1
+scikit-learn>=1.4
+joblib>=1.3
+pdfplumber>=0.11
+xgboost>=2.0      # optional — falls back to sklearn GradientBoosting if missing
+shap>=0.44        # optional — falls back to global feature importance if missing
+anthropic>=0.40   # optional — only needed for live (LLM) RAG answers
+```
+
+---
+
+## 5. Train the models (run once, in this order)
+
+Each command trains a model, prints its evaluation metrics, and saves it to `data/models/`.
+
+```bash
+python -m categorization.train          # Module 2: TF-IDF + Logistic Regression
+python -m analytics.train_health_score  # Module 3: builds population percentile reference
+python -m analytics.train_forecasting   # Module 3: forecaster vs. moving-average baseline
+python -m loan_assessment.train         # Module 4: loan model (+ SHAP if installed)
+```
+
+Modules 1 (ingestion) and 5 (RAG assistant) need no training.
+
+After this, `data/models/` should contain:
+
+```
+tfidf_vectorizer.joblib
+logreg_model.joblib
+health_score_percentiles.joblib
+forecast_model.joblib
+loan_assessment_model.joblib
+```
+
+---
+
+## 6. Verify everything works
+
+```bash
+python -m pytest test_pipeline.py -v
+```
+
+Expected: **34 passed**. Fix any failure before continuing.
+
+---
+
+## 7. Run the platform
+
+### 7.1 One command — full pipeline (interactive)
+
+```bash
+python -m run_pipeline data/raw/bank.xlsx
+```
+
+Multiple statements at once (any mix of `.csv`, `.xlsx`, `.xls`, `.pdf`):
+
+```bash
+python -m run_pipeline data/raw/bank.xlsx data/raw/Daily_Household_Transactions.csv
+```
+
+What happens, in order: ingestion → categorization → profile estimation → health score → loan pre-assessment (you'll be asked **age, credit score, assets, criminal record** — a bank statement cannot contain these, so they are never guessed) → interactive question prompt for the RAG assistant. Press Enter on an empty line to exit.
+
+### 7.2 Python shell — step-by-step control
+
+Start the shell **from the project root**:
+
+```bash
+python
+```
+
+Then enter the lines **one at a time** (pressing Enter after each). Pasting several statements on one line causes `SyntaxError`.
 
 ```python
 from finance_platform import FinancialPlatform
-
-p = FinancialPlatform("data/raw/bank.xlsx")              # single file
-# or: FinancialPlatform(["jan.csv", "feb.xlsx"])          # multiple files at once
-
-p.health_score()                    # fully automatic — no manual input needed
-p.ask("what's my total spend?")     # fully automatic
-p.full_report()                     # both of the above in one call
+p = FinancialPlatform("data/raw/bank.xlsx")        # or a list of files
+print(len(p.transactions))
+print(p.transactions[0].bank, p.transactions[0].date, p.transactions[0].amount, p.transactions[0].category)
 ```
 
-The moment you construct `FinancialPlatform`, ingestion (Module 1) and
-categorization (Module 2) already ran. `health_score()` then automatically
-estimates a financial profile from those categorized transactions
-(`analytics/profile_estimator.py`) and scores it — no manual data entry.
+**Health score (fully automatic):**
 
-**Loan Pre-Assessment is the one deliberate exception:**
 ```python
-p.loan_preassessment(age=32, credit_score=720, assets=200000,
-                      existing_loan=0, criminal_record=0)
-```
-`age`, `credit_score`, `assets`, and `criminal_record` are **required
-arguments with no defaults** — this is not a limitation I'm planning to
-lift later, it's a hard fact about what a bank statement can and can't
-tell you. No amount of transaction analysis reveals someone's credit
-score or legal history, so this platform will not guess or fabricate
-them. Income and debt-to-income *are* auto-estimated from your
-transactions and used alongside whatever you provide. Calling
-`full_report()` without these fields returns a clear `"not_run"` status
-explaining exactly what's missing and why, rather than silently skipping
-the module.
-
-### The profile estimate is an approximation — see `estimation_warnings`
-Every `health_score()`/`loan_preassessment()` result includes a
-`warnings` list (or `estimation_warnings` in the health score result)
-spelling out the real assumptions being made: monthly averaging over
-however many months your statement covers, "food" being mapped to
-Groceries with no dining-out split, Rent/Insurance depending on keyword
-matches that may miss real rent/insurance debits worded differently, and
-a flag if one category dominates so heavily it's more likely a
-categorization gap than genuine spending concentration. None of this is
-hidden inside the score — read the warnings before trusting the number.
-
-## Module 1 — Ingestion & Parsing
-Detects format (CSV/XLSX/PDF) and bank (HDFC/ICICI/SBI/generic fallback),
-parses into a canonical `Transaction` schema, cleans narration text, dedupes.
-
-Single file:
-```
-python3 -m ingestion.pipeline data/raw/bank.xlsx
+hs = p.health_score()
+print(hs["score"])
+print(hs["estimated_profile"])
+print("\n".join(hs["estimation_warnings"]))
 ```
 
-**Multiple files at once** (upload several statements in one batch):
-```
-python3 -m ingestion.pipeline data/raw/file1.csv data/raw/file2.xlsx data/raw/file3.csv
-```
-Or in code:
+**Loan pre-assessment (needs your inputs):**
+
 ```python
-from ingestion.pipeline import run_batch
-result = run_batch(["file1.csv", "file2.xlsx", "file3.csv"])
-result["transactions"]          # merged, cross-file-deduped list
-result["per_file_counts"]       # {filename: count}
-result["duplicates_removed_cross_file"]
-result["errors"]                # one bad file never aborts the whole batch
-```
-Each file is parsed independently (so one corrupt/unsupported file doesn't
-fail the others), then results are merged with **cross-file dedup** — this
-catches the same transaction appearing in two different uploaded files (e.g.
-overlapping statement periods across two exports), which the per-file dedup
-can't catch since its ID includes the source filename.
-
-**Bug caught and fixed during testing:** the first cross-file dedup version
-was matching on (date, narration, amount) too eagerly and silently dropped
-~760 genuine transactions from a single messy dataset — rows with a missing
-amount (parsed as 0.0) and a blank/"nan" narration were colliding with each
-other and getting wrongly treated as duplicates. Both dedup functions now
-require a real date, real narration, and a non-zero amount before treating
-two rows as duplicates at all; anything missing that signal is always kept.
-Verified via `test_dedup_does_not_falsely_collapse_zero_amount_rows`.
-
-- Confirmed working against real data: `bank.xlsx` (99,629 txns, auto-detected as HDFC).
-- HDFC/ICICI/SBI parsers are built from each bank's **publicly documented**
-  statement-export column layout (no real sample files exist for ICICI/SBI —
-  flagged, untested against a live ICICI/SBI export; unit tests use synthetic
-  fixtures matching the documented format).
-- PDF support requires text-layer PDFs. Scanned/image statements need OCR,
-  not yet implemented — no sample scanned PDF was available to build against.
-
-## Module 2 — Categorization
-Rule engine (keyword match, instant, confidence=1.0) runs first. Anything it
-misses falls to a TF-IDF + Logistic Regression classifier (trained on 2,000
-labeled narrations, 9 categories). Predictions below 0.55 confidence are
-flagged `low_confidence` for user review instead of guessing silently.
-
-Train (already run once, model saved to `data/models/`):
-```
-python3 -m categorization.train
+print(p.full_report()["loan_preassessment"])        # shows status: not_run + what's missing
+r = p.loan_preassessment(age=32, credit_score=720, assets=200000, existing_loan=0, criminal_record=0)
+print(r["readiness_tier"], r["approval_probability"])
+print(r["disclaimer"])
 ```
 
-Use:
+Sanity check — a weaker applicant should score worse:
+
 ```python
-from categorization.categorizer import Categorizer
-c = Categorizer()
-c.categorize("Zomato food order")
-# {'category': 'food', 'confidence': 1.0, 'source': 'rule'}
+r2 = p.loan_preassessment(age=32, credit_score=450, assets=200000, existing_loan=0, criminal_record=1)
+print(r2["readiness_tier"], r2["approval_probability"])
 ```
 
-**Honest caveat:** test accuracy on the training datasets is 100% — expected,
-since those are templated/synthetic (merchant name = category, always). Real
-messy narrations (tested against `Daily_Household_Transactions.csv`) score
-much lower and correctly get flagged `low_confidence` rather than mis-guessed
-— see test run output. More real labeled data will improve this over time;
-the rule layer + confidence threshold are there specifically to keep wrong
-guesses from slipping through silently.
+**Ask questions (RAG assistant):**
 
-Embedder is pluggable (`categorization/embedder.py`) — swapping TF-IDF for
-SBERT later is a new class, not a rewrite.
+```python
+print(p.ask("what is my total spend?")["answer"])
+print(p.ask("how much did I spend on food last month?")["answer"])
+print(p.ask("what is my top spending category?")["answer"])
+print(p.ask("how many transactions do I have?")["answer"])
+```
 
-## Module 3 — Analytics
+**Multiple files through the platform:**
 
-### Financial Health Score (`analytics/health_score.py`)
-Weighted, explainable score (0-100) calibrated against the real 20,000-profile
-population in `data.csv`. Four independent factors, each scored as a
-population percentile so there's a transparent reference point, not an
-arbitrary number:
+```python
+p2 = FinancialPlatform(["data/raw/bank.xlsx", "data/raw/Daily_Household_Transactions.csv"])
+print(p2.ingestion_report)
+```
 
-| Factor | Weight | Direction |
+**Full report in one call:**
+
+```python
+report = p.full_report(loan_manual_fields={
+    "age": 32, "credit_score": 720, "assets": 200000,
+    "existing_loan": 0, "criminal_record": 0,
+})
+```
+
+Exit the shell with `exit()`.
+
+### 7.3 Run individual modules
+
+```bash
+python -m ingestion.pipeline data/raw/bank.xlsx
+python -m ingestion.pipeline data/raw/file1.csv data/raw/file2.xlsx    # batch + cross-file dedup
+```
+
+---
+
+## 8. Optional: live LLM answers (Anthropic API)
+
+By default the assistant answers with the **no-key fallback** (exact aggregation over your data, no LLM, no hallucination). To enable live answers, set the key **in your shell** — it is read only from the environment, never hard-coded:
+
+| Shell | Set | Remove |
 |---|---|---|
-| Savings rate | 40% | higher = healthier |
-| Debt-to-income | 25% | lower = healthier |
-| Essential expense ratio (rent+groceries+utilities+healthcare / income) | 20% | lower = healthier |
-| Category diversification (Herfindahl-based) | 15% | higher = healthier |
+| Git Bash / macOS / Linux | `export ANTHROPIC_API_KEY="your-key"` | `unset ANTHROPIC_API_KEY` |
+| PowerShell | `$env:ANTHROPIC_API_KEY="your-key"` | `Remove-Item Env:ANTHROPIC_API_KEY` |
+| Command Prompt | `set ANTHROPIC_API_KEY=your-key` | `set ANTHROPIC_API_KEY=` |
 
-**Bug caught and fixed during testing:** an earlier version used
-"expense-to-income ratio" as a 4th factor, but that's mathematically
-`1 - savings_rate` — scoring both double-counted the same signal at 60%
-combined weight. Replaced with essential-expense-ratio, a genuinely
-independent measure of fixed-cost burden. Verified via
-`test_health_score_no_double_counting`.
+Check whether one is currently set: `echo $ANTHROPIC_API_KEY` (Git Bash).
 
-Train (builds the population percentile reference):
-```
-python3 -m analytics.train_health_score
-```
-Use:
-```python
-from analytics.health_score import FinancialHealthScore
-hs = FinancialHealthScore().load("data/models/health_score_percentiles.joblib")
-hs.score({"Income": 50000, "Rent": 10000, "Groceries": 5000, ...})
-```
+The `source` field in each answer tells you what happened:
 
-### Expense Forecasting (`analytics/forecasting.py`)
-XGBoost regressor (falls back to sklearn's GradientBoostingRegressor if
-xgboost isn't installed — same gradient-boosted-tree family, zero code
-changes needed) on lag + calendar features, trained on the 2020-2025 monthly
-series, evaluated against a naive 3-month moving-average baseline on the most
-recent 12 months (time-ordered holdout, no shuffling).
+| `source` value | Meaning |
+|---|---|
+| `template_fallback` | No key set — answered locally |
+| `anthropic_api` | Live LLM answer |
+| `template_fallback_after_api_error` | Key was set but the call failed (invalid/expired key, no network) — answered locally |
 
-Train + evaluate:
-```
-python3 -m analytics.train_forecasting
+> **Security:** never paste API keys into chats, commits, or screenshots. If a key has ever been shared anywhere, rotate it.
+
+---
+
+## 9. Optional: SHAP explanations and XGBoost
+
+```bash
+pip install shap xgboost
+python -m loan_assessment.train     # re-run so the saved model uses them
 ```
 
-**Honest result:** the moving-average baseline currently wins (MAE ~2,113 vs
-~3,611 for the ML model). With only 54 training months, this is a real,
-expected outcome — not a bug. Smooth, moderately-noisy short series often
-favor simple baselines over tree-based ML; this is well documented in
-forecasting literature. The comparison is deliberately printed every run so
-this isn't hidden. More historical months would likely close the gap.
+Without them the code still works: XGBoost falls back to scikit-learn gradient boosting, and SHAP falls back to global feature importances (clearly labeled as *not* per-applicant).
 
-## Module 4 — Loan Pre-Assessment
+---
 
-XGBoost classifier (falls back to sklearn's GradientBoostingClassifier if
-xgboost isn't installed) with **SHAP** explainability (`shap.TreeExplainer`),
-trained on `Loan_Prediction.csv` (12,367 applicants, ~11% approval rate,
-handled via `scale_pos_weight`). Outputs a three-tier readiness label —
-`ready` (≥60% predicted approval probability) / `borderline` (30-60%) /
-`needs_improvement` (<30%) — plus a per-applicant SHAP breakdown of which
-features pushed the prediction up or down, and a mandatory disclaimer
-attached to every single result.
+## 10. Troubleshooting
 
-**Honest result:** ROC-AUC came back at a perfect 1.0000. I checked why
-instead of taking it at face value — this dataset was generated by
-deterministic threshold rules (100% of approved applicants have
-`criminal_record == 0` AND `credit_score >= 701` AND `debt_to_income_ratio
-<= 0.29`), so perfect separation is expected on this synthetic data, not a
-sign the model is production-ready. Real applicant data will be noisier and
-will not separate this cleanly — flagging this now so it isn't mistaken for
-real-world performance later.
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Python was not found; run without arguments to install from the Microsoft Store` | Using `python3` on Windows | Use `python` |
+| `can't open file '...ingestion.pipeline'` | Missing `-m` | `python -m ingestion.pipeline ...` |
+| `ModuleNotFoundError: No module named 'ingestion'` | Not in the project root | `cd` into the folder containing `finance_platform.py` |
+| `SyntaxError` when pasting into Python | Several statements pasted on one line | Enter one statement per line |
+| `...` prompt never returns | Unclosed `(` or `[` | Type the closing character, or press Ctrl+C |
+| `test_platform_ask_works_end_to_end` fails with `template_fallback_after_api_error` | `ANTHROPIC_API_KEY` set in your shell (older test version) | `unset ANTHROPIC_API_KEY`, or use the latest `test_pipeline.py` (it clears the key itself) |
+| pandas "building from source" / wheel errors on Python 3.13 | Pinned old pandas or old pip | `python -m pip install --upgrade pip`, keep `pandas>=2.2.3` |
+| `pip` errors in a fresh venv | Outdated pip/setuptools | Step 4.3, then reinstall |
+| `FileNotFoundError: data/models/...joblib` | Models not trained yet | Run Section 5 |
+| Naming a file `platform.py` breaks pandas | Shadows Python's built-in `platform` module | Never name a project file `platform.py` (this repo uses `finance_platform.py`) |
 
-**SHAP caveat:** the sandbox this was built in has no network access to
-install `shap`, so the SHAP code path (`shap.TreeExplainer`) is written to
-the standard, stable SHAP API but wasn't executable in this environment. A
-fallback to the model's global `feature_importances_` was built in and
-tested, and it kicks in automatically and prints a clear label
-(`"shap not installed"`) if `shap` isn't present — so the code never
-silently breaks either way. **Run `pip install shap` on your machine, then
-re-run `python3 -m loan_assessment.train` once, to confirm the real
-per-applicant SHAP values before relying on this for anything real.**
+---
 
-Train + evaluate:
-```
-python3 -m loan_assessment.train
-```
-Use:
-```python
-from loan_assessment.model import LoanAssessor
-assessor = LoanAssessor().load("data/models/loan_assessment_model.joblib")
-assessor.assess({"age": 35, "income": 90000, "assets": 300000,
-                  "credit_score": 780, "debt_to_income_ratio": 0.2,
-                  "existing_loan": 0, "criminal_record": 0})
-```
+## 11. Project structure
 
-## Module 5 — RAG Conversational Assistant (backend only, no Streamlit)
-
-Per your decision: this is the RAG engine only — retrieval + generation +
-no-key fallback, tested via scripts. No Streamlit dashboard file was built.
-
-### Retrieval (`rag_assistant/retriever.py`)
-TF-IDF over the user's own transactions (narration + category + date +
-amount), per your decision to stay consistent with Module 2 rather than add
-an SBERT dependency. The corpus is always a single user's own transaction
-history, built fresh per session — not a persistent trained model.
-
-### Generation (`rag_assistant/assistant.py`)
-- If `ANTHROPIC_API_KEY` is set in the environment → calls the real
-  Anthropic API with the retrieved transactions as grounding context.
-- If not set → falls back to `rag_assistant/no_key_fallback.py`, a
-  template/pattern layer that answers directly from the data via exact
-  aggregation (no LLM, no hallucination risk).
-- If the API call fails for any reason (bad/expired/rate-limited key,
-  network error) → catches the exception and falls back to the template
-  layer rather than crashing, and says so in the response.
-
-**Security note:** the API key is read only from the `ANTHROPIC_API_KEY`
-environment variable — never hardcoded, logged, or accepted as a plain
-argument. **A key was pasted into this chat during development — treat it
-as compromised and rotate it before using this module for anything real.**
-The API call path is written to the correct, standard `anthropic` SDK shape
-but was **not executable in this sandbox** (no network/key access here) —
-only the no-key fallback path below has actually been run and verified.
-
-### What's actually tested (no-key fallback, 8 tests)
-- "how much did I spend on `<category>` this/last month?"
-- "what's my top spending category?" / "what's my total spend?"
-- "how many transactions do I have?"
-- Unmatched queries return guidance instead of a wrong guess.
-
-**Bug caught and fixed during testing:** the category-matching regex
-extracted the literal phrase from the question (e.g. "groceries"), but
-Module 2's categorizer only ever produces `food`/`travel`/`utilities`/etc.
-— so "how much did I spend on groceries" was silently returning "no
-transactions found" even when matching data existed. Added a synonym map
-(`groceries`→`food`, `medical`→`healthcare`, etc.) so common phrasings
-resolve to the actual category label. This is exact-phrase matching, not
-fuzzy — a synonym has to match the whole extracted phrase (e.g. "medical
-bills" won't match the "medical" entry) — a real remaining limitation,
-documented rather than silently left in.
-
-**Honest caveat carried over from Module 2:** the RAG answers are only as
-good as the categories Module 2 assigned. Tested on real data
-(`Daily_Household_Transactions.csv`), Module 2's rule engine defaults a
-large majority of short/generic real-world narrations to `food` (2,184 of
-2,458 transactions) — so category-specific RAG answers on messy real data
-will inherit that skew until Module 2's categorization is improved with
-more real labeled data.
-
-Use:
-```python
-from ingestion.pipeline import run
-from categorization.categorizer import Categorizer
-from rag_assistant.assistant import FinancialAssistant
-
-txns = run("data/raw/Daily_Household_Transactions.csv")
-Categorizer().categorize_transactions(txns)
-assistant = FinancialAssistant(txns)
-assistant.ask("how much did I spend on food last month?")
-```
-
-## Running the whole platform in one command (all 5 modules, automatic)
-
-**This is the single unified flow: upload a bank statement, everything else
-runs automatically, with one exception explained below.**
-
-```
-python -m run_pipeline data/raw/bank.xlsx
-python -m run_pipeline data/raw/statement_jan.csv data/raw/statement_feb.xlsx   # multiple files
-```
-
-What happens automatically, in order:
-1. **Ingestion** (Module 1) — detects bank/format, parses, cleans, dedupes.
-2. **Categorization** (Module 2) — rule engine + ML classifier tags every transaction.
-3. **Profile estimation** (`analytics/profile_estimator.py`, new) — derives a
-   monthly income/expense profile FROM your categorized transactions, bridging
-   Module 2's output to the structured input Modules 3 & 4 need.
-4. **Health Score** (Module 3) — runs automatically on the derived profile,
-   prints the full weighted breakdown.
-5. **Loan Pre-Assessment** (Module 4) — income, debt-to-income ratio, and
-   existing-loan flag are auto-filled from your statement. **You will be
-   asked 4 questions: age, credit score, assets, criminal record.** This is
-   not a design choice to add friction — a bank statement genuinely contains
-   no signal for any of these four fields, so guessing them would mean
-   silently fabricating inputs to a model whose output gets called
-   "loan readiness." Asking is the honest option.
-6. **RAG Assistant** (Module 5) — drops into an interactive prompt to ask
-   questions about your statement, grounded in the same ingested data.
-
-### Honest limitations of the auto-derivation (read before trusting the numbers)
-- **Module 2 has no "rent" or "insurance" category at all.** Both always
-  come out as 0 in the derived profile — a real gap in your essential
-  expenses that isn't visible unless you know to look for it.
-- **"food" is mapped entirely to Groceries** (Module 2 doesn't separate
-  dining from groceries) — this both overstates Groceries and, combined
-  with Module 2's known tendency to over-predict "food" on messy real-world
-  narrations (documented in Module 2's section above), can compress your
-  Health Score's category-diversification factor toward its worst
-  percentile. This isn't a bug — it's the food-categorization skew
-  propagating downstream, and it's worth fixing Module 2's accuracy before
-  trusting the diversification score.
-- **Loan_Prediction.csv's income units (monthly vs. annual) are undocumented
-  and unknown.** Your derived MONTHLY income is passed in as-is. This is a
-  genuine, unresolved ambiguity, disclosed rather than silently guessed —
-  treat any loan-readiness output with extra caution beyond the standard
-  disclaimer already attached to every result.
-- All profile figures are **monthly averages** over however much statement
-  history you uploaded — one month of data gives a much noisier estimate
-  than a year's worth.
-
-If you'd rather supply Module 3/4 profile data yourself instead of trusting
-the auto-derivation, call `HealthScorer`/`LoanAssessor` directly as shown in
-their sections above — the automatic chain is a convenience layer on top of
-the same tested functions, not a replacement for them.
-
-## Tests
-```
-python3 -m pytest test_pipeline.py -v
-```
-34/34 passing — bank detection (all 3 banks + fallback), real-file parsing,
-sign-convention correctness, single + cross-file dedup (incl. the
-false-positive regression test), multi-file batch upload (incl. partial
-failure handling), rule + ML categorization, health score breakdown +
-non-redundancy, forecast model sanity, loan tier/disclaimer/explanation
-correctness, RAG retrieval + no-key fallback (category spend, synonym
-mapping, total spend, unmatched-query guidance, end-to-end assistant),
-profile estimator (health-score compatibility, investment-exclusion
-regression test, missing-loan-field flagging), and the unified
-FinancialPlatform (automatic health score from upload, loan
-pre-assessment correctly requiring manual fields, end-to-end Q&A).
-
-## Structure
 ```
 ingestion/
-  schema.py                  # canonical Transaction dataclass
-  extractors/                # csv / excel / pdf -> DataFrame
-  detectors/bank_detector.py # fingerprint match -> parser
-  parsers/                   # hdfc / icici / sbi / generic
-  cleaning/                  # narration_cleaner, deduplicator (single + cross-file)
-  pipeline.py                # run() single file, run_batch() multi-file upload
+  schema.py                   canonical Transaction dataclass
+  extractors/                 csv / excel / pdf  ->  DataFrame
+  detectors/bank_detector.py  header fingerprint  ->  parser
+  parsers/                    hdfc / icici / sbi / generic
+  cleaning/                   narration_cleaner, deduplicator (single + cross-file)
+  pipeline.py                 run() single file, run_batch() multi-file
 categorization/
-  rules.py                   # keyword rules (editable dict)
-  embedder.py                # pluggable interface, TF-IDF default
-  classifier.py               # LogisticRegression wrapper
-  train.py                    # merges labeled datasets, trains, saves
-  categorizer.py               # rules-first, ML-fallback orchestrator
+  rules.py                    keyword rules (editable)
+  embedder.py                 pluggable embedder interface (TF-IDF default)
+  classifier.py               Logistic Regression wrapper
+  train.py                    trains + saves the classifier
+  categorizer.py              rules first, ML fallback, confidence-gated
 analytics/
-  health_score.py             # weighted percentile-based scorer
-  train_health_score.py       # builds population reference, saves it
-  forecasting.py               # feature engineering + XGBoost/sklearn forecaster
-  train_forecasting.py         # trains, evaluates vs baseline, saves
-  profile_estimator.py         # bridges categorized transactions -> Module 3/4 profile input
+  health_score.py             weighted percentile-based scorer
+  train_health_score.py       builds population reference
+  forecasting.py              feature engineering + XGBoost/sklearn forecaster
+  train_forecasting.py        trains + compares against moving-average baseline
+  profile_estimator.py        categorized transactions -> Module 3/4 profile
 loan_assessment/
-  model.py                     # XGBoost/sklearn classifier + SHAP explainability + tiering
-  train.py                     # trains, evaluates, saves, runs sample assessment
+  model.py                    classifier + SHAP + 3-tier output + disclaimer
+  train.py                    trains + evaluates
 rag_assistant/
-  retriever.py                 # TF-IDF retrieval over one user's own transactions
-  no_key_fallback.py           # template Q&A, no LLM — the tested path
-  assistant.py                 # orchestrator: retrieval + API-or-fallback generation
-finance_platform.py           # THE single entry point: upload -> auto categorize+score+ask
-run_pipeline.py                # lighter chain: ingest+categorize+interactive RAG prompt
-data/raw/                    # your uploaded datasets
-data/models/                 # trained tfidf_vectorizer.joblib, logreg_model.joblib,
-                              # health_score_percentiles.joblib, forecast_model.joblib,
-                              # loan_assessment_model.joblib
+  retriever.py                TF-IDF retrieval over the user's own transactions
+  no_key_fallback.py          exact-aggregation answers (no LLM)
+  assistant.py                retrieval + API-or-fallback generation
+finance_platform.py           single entry point (FinancialPlatform)
+run_pipeline.py               one-command interactive run
+test_pipeline.py              34 automated tests
+backend_api/                  (not covered in this README — see that folder)
+frontend/                     (not covered in this README — see that folder)
+data/raw/                     datasets
+data/models/                  trained models
+```
+
+---
+
+## 12. How each result is computed
+
+**Financial Health Score (0–100)** — weighted average of four factors, each converted to a percentile against the 20,000-profile reference population (`data.csv`):
+
+| Factor | Weight | Healthier when |
+|---|---|---|
+| Savings rate | 40% | higher |
+| Debt-to-income | 25% | lower |
+| Essential expense ratio (rent + groceries + utilities + healthcare ÷ income) | 20% | lower |
+| Category diversification | 15% | higher |
+
+**Forecasting** — gradient-boosted regressor on lag + calendar features, evaluated on a time-ordered 12-month holdout against a naive 3-month moving-average baseline. Both MAE values print on every training run.
+
+**Loan readiness** — `ready` (≥ 60%), `borderline` (30–60%), `needs_improvement` (< 30%) predicted approval probability, with a disclaimer attached to every result.
+
+**Profile estimation** — monthly averages over the months your statement covers; income = total credits ÷ months. Every estimate ships with an `estimation_warnings` list.
+
+---
+
+## 13. Known limitations (read before trusting numbers)
+
+- **Synthetic training data.** Module 2 reports ~100% accuracy and Module 4 reports ROC-AUC 1.0 because the datasets are templated / rule-generated. Real-world performance will be lower; Module 2 therefore flags uncertain predictions as `low_confidence` instead of guessing.
+- **Module 2 skews toward `food`** on short, generic real-world narrations, which can distort the diversification score and category-based answers.
+- **Forecasting:** the moving-average baseline currently beats the ML model (limited history: 54 training months). The comparison is shown, not hidden.
+- **Loan model:** `age`, `credit_score`, `assets`, `criminal_record` can never be derived from a bank statement — they are required inputs. Income scale in `Loan_Prediction.csv` may differ from monthly income estimated from statements; treat outputs as rough pre-assessment only. Not a lending decision.
+- **ICICI / SBI parsers** are built from publicly documented layouts and unit-tested on synthetic fixtures — not verified against real exports. HDFC is verified on real data.
+- **PDF:** text-layer PDFs only. Scanned/image statements need OCR (not implemented).
+- **RAG fallback** matches known question patterns and exact-phrase synonyms (e.g. "groceries" → food); unknown phrasings return guidance rather than a guess.
+- **Rent / Insurance** are detected by keyword only; differently worded debits fall into Miscellaneous.
+
+---
+
+## 14. Quick start (copy-paste summary)
+
+```bash
+python -m venv venv
+source venv/Scripts/activate              # Git Bash on Windows
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+pip install pytest
+
+python -m categorization.train
+python -m analytics.train_health_score
+python -m analytics.train_forecasting
+python -m loan_assessment.train
+
+python -m pytest test_pipeline.py -v      # expect 34 passed
+python -m run_pipeline data/raw/bank.xlsx
 ```
